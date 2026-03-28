@@ -48,11 +48,8 @@ data/*.parquet
 data/*.zip
 
 # Generated analysis outputs (large PNGs + CSVs from phase runs)
-# Keep only phase2 SP500 images (used in README)
-analysis/phase3_*
-analysis/phase4_*
-analysis/phase5_*
-analysis/output/
+# ALL analysis/ is gitignored — README images live in images/
+analysis/
 
 # Logs
 logs/

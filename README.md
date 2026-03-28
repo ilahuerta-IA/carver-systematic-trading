@@ -10,15 +10,15 @@ Multi-asset trend following + carry system operating on daily timeframe with **c
 
 ### Equity & Drawdown
 
-![Equity & Drawdown](analysis/phase2_equity_SP500.png)
+![Equity & Drawdown](images/phase2_equity_SP500.png)
 
 ### Position Overlay on Price
 
-![Position on Price](analysis/phase2_position_SP500.png)
+![Position on Price](images/phase2_position_SP500.png)
 
 ### Forecast Distribution
 
-![Forecast Distribution](analysis/phase2_forecast_dist_SP500.png)
+![Forecast Distribution](images/phase2_forecast_dist_SP500.png)
 
 ### Key Metrics
 
@@ -50,7 +50,8 @@ Multi-asset trend following + carry system operating on daily timeframe with **c
 core/       - Forecast calculation (EWMAC scalars, vol targeting)
 backtest/   - Pandas-based daily engine with dynamic capital
 tools/      - Data download, Phase 2 runner with --save-only mode
-analysis/   - Generated charts and adjustment logs
+analysis/   - Generated charts and adjustment logs (not tracked)
+images/     - README assets (tracked)
 data/       - Daily OHLCV from Yahoo Finance (not tracked)
 ```
 
