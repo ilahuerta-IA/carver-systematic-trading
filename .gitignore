@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv/
+
+# Environment Variables
+.env
+.env.local
+
+# Credentials (NEVER commit real credentials)
+config/credentials/
+!config/credentials/*_template.json
+
+# VS Code
+.vscode/
+
+# PyCharm
+.idea/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data Files (Daily CSVs should not be in git)
+data/*.csv
+data/*.parquet
+data/*.zip
+
+# Logs
+logs/
+
+# Operating System
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Private AI context files (NEVER public — equivalent to credentials)
+# Contains: axioms, strategy docs, live analysis, session history
+context/
