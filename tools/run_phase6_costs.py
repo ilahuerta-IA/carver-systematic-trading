@@ -130,7 +130,7 @@ def build_costs_dict(include_swap=True):
 
 
 def run_scenario(label, instrument_data, costs, vol_target, capital,
-                 buffer_fraction):
+                 buffer_fraction, rates_daily=None, ref_rates=None):
     """Run one scenario (gross, net, or no-swap) and return results + metrics."""
     print(f"\n  Running {label}...")
     results = run_portfolio_backtest(
@@ -140,6 +140,8 @@ def run_scenario(label, instrument_data, costs, vol_target, capital,
         buffer_fraction=buffer_fraction,
         idm=None,
         costs=costs,
+        rates_daily=rates_daily,
+        ref_rates=ref_rates,
     )
     metrics = calculate_metrics(results["equity"], results["returns"], capital)
     return results, metrics
@@ -370,9 +372,26 @@ def main():
     print(f" Costs: Darwinex Zero (spread + commission + swap)")
     if no_swap:
         print(f" NOTE: --no-swap flag active, swap costs excluded")
-    print(f" WARNING: Swap rates are 2026-03 levels. Historical swap")
-    print(f"          was near zero during ZIRP (2009-2022).")
+    print(f" Swap: TIME-VARYING using historical interest rates.")
+    print(f"       Swap calibrated at 2026-03 rates, scaled by")
+    print(f"       rate(date) / rate(2026-03) for each day.")
     print(f"{'='*70}")
+
+    # Load historical interest rates for time-varying swap
+    from core.carry import load_rates, _rates_to_daily
+    from core.costs import build_reference_rates
+
+    print(f"\nLoading historical interest rates...")
+    rates_monthly = load_rates(ROOT / "data")
+    daily_idx = pd.date_range("1999-01-01", "2027-12-31", freq="B")
+    rates_daily = _rates_to_daily(rates_monthly, daily_idx)
+    ref_rates = build_reference_rates(rates_daily)
+    print(f"  Rates: {rates_monthly.index[0].date()} to "
+          f"{rates_monthly.index[-1].date()}, "
+          f"{len(rates_monthly.columns)} currencies")
+    print(f"  Reference rates (swap calibration):")
+    for ccy, rate in sorted(ref_rates.items()):
+        print(f"    {ccy}: {rate:.2f}%")
 
     # Prepare instruments (EWMAC only)
     print(f"\nPreparing instruments...")
@@ -395,15 +414,17 @@ def main():
     print(f"  IDM: {idm:.4f}")
     print_metrics(met_gross, title="Portfolio GROSS (no costs)")
 
-    # --- SCENARIO 2: NET (with costs) ---
+    # --- SCENARIO 2: NET with time-varying swap ---
     costs_full = build_costs_dict(include_swap=not no_swap)
     res_net, met_net = run_scenario(
-        "Net" if not no_swap else "Net (no swap)",
+        "Net (hist swap)" if not no_swap else "Net (no swap)",
         instrument_data, costs=costs_full,
         vol_target=vol_target, capital=capital,
-        buffer_fraction=buffer_fraction
+        buffer_fraction=buffer_fraction,
+        rates_daily=rates_daily if not no_swap else None,
+        ref_rates=ref_rates if not no_swap else None,
     )
-    net_label = "Net (full)" if not no_swap else "Net (no swap)"
+    net_label = "Net (hist swap)" if not no_swap else "Net (no swap)"
     print_metrics(met_net, title=f"Portfolio {net_label}")
 
     # --- SCENARIO 3: NET no swap (if not already --no-swap) ---

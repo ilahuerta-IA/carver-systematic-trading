@@ -105,7 +105,8 @@ def portfolio_position(forecast, capital, vol_target_annual, idm,
 
 def run_portfolio_backtest(instrument_data, vol_target_annual=0.12,
                            capital=100000, buffer_fraction=0.10,
-                           idm=None, costs=None):
+                           idm=None, costs=None,
+                           rates_daily=None, ref_rates=None):
     """
     Run a multi-instrument portfolio backtest.
 
@@ -126,6 +127,8 @@ def run_portfolio_backtest(instrument_data, vol_target_annual=0.12,
              calculates from instrument return correlations.
         costs: dict of {name: cost_dict} or None.
                When provided, transaction costs are deducted from PnL.
+        rates_daily: pd.DataFrame of daily interest rates (for time-varying swap).
+        ref_rates: dict of reference rates at swap calibration time.
 
     Returns:
         dict with:
@@ -177,7 +180,8 @@ def run_portfolio_backtest(instrument_data, vol_target_annual=0.12,
     # Pass 2 (or only pass): run with actual IDM and optional costs
     results = _run_portfolio_pass(
         instrument_data, date_index, vol_target_annual,
-        capital, buffer_fraction, weight, idm=idm_calc, costs=costs
+        capital, buffer_fraction, weight, idm=idm_calc, costs=costs,
+        rates_daily=rates_daily, ref_rates=ref_rates
     )
 
     # Calculate correlation matrix if not done in pass 1
@@ -196,15 +200,18 @@ def run_portfolio_backtest(instrument_data, vol_target_annual=0.12,
 
 
 def _run_portfolio_pass(instrument_data, date_index, vol_target_annual,
-                        capital, buffer_fraction, weight, idm, costs=None):
+                        capital, buffer_fraction, weight, idm, costs=None,
+                        rates_daily=None, ref_rates=None):
     """
     Internal: run one pass of the portfolio backtest.
 
     Day-by-day loop across all instruments with shared capital.
     When costs dict is provided, deducts spread + commission + swap.
+    When rates_daily + ref_rates provided, swap is time-varying.
     """
     from core.forecast import price_volatility
-    from core.costs import calculate_daily_cost
+    from core.costs import calculate_daily_cost, get_swap_scale
+    from config.instruments import INSTRUMENTS
 
     n_days = len(date_index)
 
@@ -286,8 +293,19 @@ def _run_portfolio_pass(instrument_data, date_index, vol_target_annual,
             # Transaction costs
             if costs and name in costs:
                 delta = new_pos - prev_pos
+
+                # Time-varying swap scale
+                ss = 1.0
+                if rates_daily is not None and ref_rates is not None:
+                    if name in INSTRUMENTS:
+                        ss = get_swap_scale(
+                            name, INSTRUMENTS[name], date,
+                            rates_daily, ref_rates
+                        )
+
                 cost_total, cost_trade, cost_swap = calculate_daily_cost(
-                    delta, prev_pos, close[date], costs[name]
+                    delta, prev_pos, close[date], costs[name],
+                    swap_scale=ss
                 )
                 pnl -= cost_total
                 inst_trade_costs[name] += cost_trade
