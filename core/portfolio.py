@@ -105,7 +105,7 @@ def portfolio_position(forecast, capital, vol_target_annual, idm,
 
 def run_portfolio_backtest(instrument_data, vol_target_annual=0.12,
                            capital=100000, buffer_fraction=0.10,
-                           idm=None):
+                           idm=None, costs=None):
     """
     Run a multi-instrument portfolio backtest.
 
@@ -124,6 +124,8 @@ def run_portfolio_backtest(instrument_data, vol_target_annual=0.12,
         buffer_fraction: float
         idm: float or None. If None, uses 1.0 for first pass then
              calculates from instrument return correlations.
+        costs: dict of {name: cost_dict} or None.
+               When provided, transaction costs are deducted from PnL.
 
     Returns:
         dict with:
@@ -134,6 +136,7 @@ def run_portfolio_backtest(instrument_data, vol_target_annual=0.12,
             - idm: float (calculated or provided)
             - weights: dict of {name: float}
             - corr_matrix: pd.DataFrame
+            - cost_detail: dict (only when costs provided)
     """
     from core.forecast import price_volatility
 
@@ -171,10 +174,10 @@ def run_portfolio_backtest(instrument_data, vol_target_annual=0.12,
         idm_calc = idm
         corr_matrix = None
 
-    # Pass 2 (or only pass): run with actual IDM
+    # Pass 2 (or only pass): run with actual IDM and optional costs
     results = _run_portfolio_pass(
         instrument_data, date_index, vol_target_annual,
-        capital, buffer_fraction, weight, idm=idm_calc
+        capital, buffer_fraction, weight, idm=idm_calc, costs=costs
     )
 
     # Calculate correlation matrix if not done in pass 1
@@ -193,13 +196,15 @@ def run_portfolio_backtest(instrument_data, vol_target_annual=0.12,
 
 
 def _run_portfolio_pass(instrument_data, date_index, vol_target_annual,
-                        capital, buffer_fraction, weight, idm):
+                        capital, buffer_fraction, weight, idm, costs=None):
     """
     Internal: run one pass of the portfolio backtest.
 
     Day-by-day loop across all instruments with shared capital.
+    When costs dict is provided, deducts spread + commission + swap.
     """
     from core.forecast import price_volatility
+    from core.costs import calculate_daily_cost
 
     n_days = len(date_index)
 
@@ -224,6 +229,11 @@ def _run_portfolio_pass(instrument_data, date_index, vol_target_annual,
     portfolio_pnl = pd.Series(0.0, index=date_index)
     inst_positions = {n: pd.Series(0.0, index=date_index) for n in names}
     inst_returns = {n: pd.Series(0.0, index=date_index) for n in names}
+
+    # Cost tracking (populated only when costs provided)
+    total_costs = pd.Series(0.0, index=date_index)
+    inst_trade_costs = {n: 0.0 for n in names}
+    inst_swap_costs = {n: 0.0 for n in names}
 
     for i in range(1, n_days):
         date = date_index[i]
@@ -269,9 +279,20 @@ def _run_portfolio_pass(instrument_data, date_index, vol_target_annual,
 
             inst_positions[name].iloc[i] = new_pos
 
-            # PnL from yesterday's position
+            # PnL from yesterday's position (gross)
             price_change = close[date] - close[prev_date]
             pnl = prev_pos * price_change * pv
+
+            # Transaction costs
+            if costs and name in costs:
+                delta = new_pos - prev_pos
+                cost_total, cost_trade, cost_swap = calculate_daily_cost(
+                    delta, prev_pos, close[date], costs[name]
+                )
+                pnl -= cost_total
+                inst_trade_costs[name] += cost_trade
+                inst_swap_costs[name] += cost_swap
+                total_costs.iloc[i] += cost_total
 
             inst_returns[name].iloc[i] = pnl
             day_pnl += pnl
@@ -284,4 +305,7 @@ def _run_portfolio_pass(instrument_data, date_index, vol_target_annual,
         "returns": portfolio_pnl,
         "instrument_returns": inst_returns,
         "instrument_positions": inst_positions,
+        "total_costs": total_costs,
+        "inst_trade_costs": inst_trade_costs,
+        "inst_swap_costs": inst_swap_costs,
     }
