@@ -1,74 +1,131 @@
-# Carver Systematic Trading
+# Carver Systematic Trading — Applied to CFDs
 
-Systematic portfolio trading system based on Robert Carver's *Advanced Futures Trading Strategies*.
+> **Conclusion: EWMAC trend following on retail CFDs is not viable after swap costs.**
+> This repository documents the complete research process — from successful gross backtesting to the definitive cost analysis that proved the strategy inoperable on CFDs.
 
-Multi-asset trend following + carry system operating on daily timeframe with **continuous position sizing** via volatility targeting. Zero optimized parameters — all values taken directly from published literature.
+Systematic portfolio trading system based on Robert Carver's *Advanced Futures Trading Strategies*, applied to 10 CFD instruments on Darwinex Zero. Daily timeframe, continuous position sizing via volatility targeting, zero optimized parameters — all values taken directly from published literature.
 
-## Phase 2 Results — EWMAC(64/256) on SP500
+---
 
-> 26.2 years backtest (2000–2026) · $100K initial capital · **Gross returns (no costs)**
+## The Story in Three Charts
 
-### Equity & Drawdown
+### 1. The Promise — Gross Portfolio (Sharpe 0.31)
 
-![Equity & Drawdown](images/phase2_equity_SP500.png)
+EWMAC trend following across 10 instruments produces a respectable gross equity curve over 26 years. Sharpe 0.31, CAGR 3.2%, Max DD -28.5%. The system works *before* costs.
 
-### Position Overlay on Price
+![Portfolio Gross Equity](images/phase5_equity_modeA.png)
 
-![Position on Price](images/phase2_position_SP500.png)
+### 2. The Problem — Swap Costs Destroy the Edge
 
-### Forecast Distribution
+Adding realistic CFD transaction costs (spread + commission + **daily swap**) reveals the core issue. The orange line shows cumulative swap costs exceeding $100K over 26 years — more than the initial capital. Swap alone turns +$130K gross profit into -$80K net loss.
 
-![Forecast Distribution](images/phase2_forecast_dist_SP500.png)
+![Gross vs Net Equity](images/phase6_equity_gross_vs_net.png)
 
-### Key Metrics
+### 3. The Definitive Test — Carry-Gate Cannot Save It
 
-| Metric | Value |
-|--------|-------|
-| **Sharpe Ratio** | 0.48 |
-| **Sortino Ratio** | 0.53 |
-| **Calmar Ratio** | 0.22 |
-| **CAGR** | 6.65% |
-| **Annual Volatility** | 16.3% |
-| **Max Drawdown** | -30.5% |
-| **Profit Factor** | 1.09 |
-| **Winning Years** | 15 / 27 |
-| **Forecast Abs Mean** | 10.94 (target: 10) ✅ |
-| **Forecast Std** | 9.68 (target: 10) ✅ |
+A "carry-gate" mechanism was developed to penalize positions during high-swap periods. Even at the most aggressive threshold (θ=3%, blocking up to 45% of trading days on some instruments), the best achievable Profit Factor is **1.014** — well below the 1.10 minimum for live trading.
 
-## Key Principles
+![Theta Sweep](images/phase6b_theta_sweep.png)
 
-- **EWMAC** — Exponentially Weighted Moving Average Crossover for trend signals
-- **Per-speed forecast scalars** from Carver Ch.15 (no optimization)
-- **Volatility targeting** (12% annual) for position sizing
-- **Buffering** (10%) to minimize unnecessary position adjustments
-- **Forecast capping** at ±20 to limit extreme positions
-- **Mark-to-market capital** — positions scale with equity
+---
 
-## Architecture
+## Final Results
+
+| Scenario | Sharpe | CAGR | Max DD | Profit Factor | Verdict |
+|----------|--------|------|--------|---------------|---------|
+| **Gross (no costs)** | 0.314 | 3.2% | -28.5% | 1.07 | System has edge before costs |
+| **Net (spread + commission only)** | 0.216 | 2.1% | -32.8% | 1.04 | Marginal without swap |
+| **Net (full costs, no gate)** | -0.456 | -6.4% | -88.0% | 0.88 | Destroyed by swap |
+| **Net (carry-gate θ=3%)** | 0.118 | 0.6% | -36.0% | 1.01 | Best case: still inoperable |
+
+### Per-Instrument Net PnL (Best Case: θ=3%, 26 years)
+
+| Instrument | Net PnL | Note |
+|------------|---------|------|
+| USDJPY | +$20,160 | Best performer (positive swap) |
+| NIKKEI225 | +$15,133 | Genuine trend follower |
+| NASDAQ100 | +$9,691 | Recovers with aggressive gate |
+| SP500 | +$3,826 | Marginal positive |
+| AUDUSD | +$929 | Breakeven |
+| EURUSD | +$56 | Breakeven |
+| GOLD | -$4,717 | Swap too high |
+| DAX40 | -$5,977 | Trap: looks good gross, fails net |
+| SILVER | -$10,496 | Chronic loser |
+| GBPUSD | -$10,331 | Double-negative swap |
+
+---
+
+## Why It Fails (and Why This Matters)
+
+Carver's framework was designed for **futures**, where:
+- Holding costs are embedded in the price (contango/backwardation), not charged daily
+- Transaction costs are a fraction of the daily range
+- The edge-to-cost ratio is fundamentally different
+
+On **retail CFDs**, the daily swap charge creates a structural drag that trend following cannot overcome. The strategy needs positions held for weeks/months to capture fat tails, but every day in a position costs money. This is not a parameter problem — it's a structural incompatibility.
+
+### The Carry-Gate Innovation
+
+We developed a continuous carry-gate penalty:
+
+$$penalty = \max\left(0,\; 1 - \frac{|swap_{daily}|}{ATR_{daily} \times \theta}\right)$$
+
+This scales down the forecast when swap costs are high relative to volatility. It recovered 0.57 Sharpe units (from -0.46 to +0.12) but the structural gap is too large for any filter to bridge.
+
+---
+
+## What Was Built
+
+Despite the negative conclusion, the codebase implements a complete Carver system:
+
+| Phase | Description | Status | Key Finding |
+|-------|-------------|--------|-------------|
+| **1** | Data pipeline (10 instruments, 26 years) | ✅ | Yahoo Finance daily OHLCV |
+| **2** | EWMAC single-speed (64/256) validation | ✅ | Forecast ≈ N(0,10) confirmed |
+| **3** | Multi-speed EWMAC (4 speeds + combination) | ✅ | FDM = 1.04 (Carver reference) |
+| **4** | Carry signal investigation | ❌ | Discarded — no improvement over EWMAC |
+| **5** | Portfolio + IDM (10 instruments) | ✅ | IDM = 2.17, Sharpe 0.31 gross |
+| **6** | Transaction costs (time-varying swap) | ✅ | Swap destroys all edge |
+| **6b** | Universe filtering + carry-gate | ✅ | Best PF = 1.014 — inoperable |
+
+### Position Sizing Formula
+
+$$Position = \frac{Forecast}{10} \times \frac{Daily\_Risk\_Target}{Daily\_Price\_Volatility \times Point\_Value}$$
+
+Where:
+- Forecast ∈ [-20, +20], scaled so |mean| ≈ 10
+- Daily risk target = Capital × Annual vol target / √252
+- Volatility estimated via exponential weighted std (span=25)
+
+### Architecture
 
 ```
-core/       - Forecast calculation (EWMAC scalars, vol targeting)
+core/       - EWMAC forecasts, vol targeting, costs model, carry-gate
 backtest/   - Pandas-based daily engine with dynamic capital
-tools/      - Data download, Phase 2 runner with --save-only mode
-analysis/   - Generated charts and adjustment logs (not tracked)
-images/     - README assets (tracked)
+config/     - Instrument metadata + Darwinex CFD cost parameters
+tools/      - Phase runners, data download, analysis scripts
 data/       - Daily OHLCV from Yahoo Finance (not tracked)
+analysis/   - Generated charts (not tracked)
+images/     - README assets
 ```
+
+## Key Design Principles
+
+All from Carver's published work — **zero optimization**:
+
+- **EWMAC forecast scalars** from Ch.15 lookup tables
+- **Forecast Distribution Multiplier** (FDM) from Ch.15
+- **Instrument Diversification Multiplier** (IDM) calculated from correlations
+- **Equal weights** (1/N) across instruments and forecast speeds
+- **10% position buffer** to avoid unnecessary adjustments
+- **12% annual volatility target**
+- **Mark-to-market capital** — positions scale with equity
 
 ## Instruments
 
 SP500 · NASDAQ100 · DAX40 · NIKKEI225 · GOLD · SILVER · EURUSD · USDJPY · AUDUSD · GBPUSD
 
-## Roadmap
-
-- [x] **Phase 1** — Data pipeline (10 instruments, 20+ years daily)
-- [x] **Phase 2** — Single EWMAC speed validation (64/256 on SP500)
-- [ ] **Phase 3** — Multi-speed EWMAC (4 speeds + forecast combination)
-- [ ] **Phase 4** — Carry signal
-- [ ] **Phase 5** — Multi-instrument portfolio + IDM
-- [ ] **Phase 6** — Transaction costs (spread, swap, commission)
-- [ ] **Phase 7** — Paper trading via MT5
-- [ ] **Phase 8** — Live trading
+All via Darwinex Zero CFDs, daily timeframe, 2000–2026.
 
 ## Quick Start
 
@@ -78,12 +135,20 @@ pip install -r requirements.txt
 # Download data (10 instruments)
 python tools/download_data.py
 
-# Run Phase 2 backtest with charts
-python tools/run_phase2_ewmac.py
+# Run gross portfolio backtest
+python tools/run_phase5_portfolio.py --save-only
 
-# Save charts without display
-python tools/run_phase2_ewmac.py --save-only
+# Run cost analysis with carry-gate theta sweep
+python tools/run_phase6b_theta.py --save-only
 ```
+
+## Lessons Learned
+
+1. **Always model costs first.** A Sharpe 0.31 gross system can be Sharpe -0.46 net.
+2. **Swap is the silent killer on CFDs.** It's not the spread or commission — it's the daily financing charge on held positions.
+3. **Trend following needs cheap holding costs.** The strategy is designed for futures where cost-of-carry is priced into the contract, not charged as a daily fee.
+4. **Carry-gate is a valid concept** but cannot overcome structural cost disadvantages. It's a filter, not a fix.
+5. **Carver's framework is excellent** for risk management and position sizing — those components are reusable even if EWMAC on CFDs fails.
 
 ## References
 
