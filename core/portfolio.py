@@ -106,7 +106,8 @@ def portfolio_position(forecast, capital, vol_target_annual, idm,
 def run_portfolio_backtest(instrument_data, vol_target_annual=0.12,
                            capital=100000, buffer_fraction=0.10,
                            idm=None, costs=None,
-                           rates_daily=None, ref_rates=None):
+                           rates_daily=None, ref_rates=None,
+                           carry_gate=None):
     """
     Run a multi-instrument portfolio backtest.
 
@@ -129,6 +130,8 @@ def run_portfolio_backtest(instrument_data, vol_target_annual=0.12,
                When provided, transaction costs are deducted from PnL.
         rates_daily: pd.DataFrame of daily interest rates (for time-varying swap).
         ref_rates: dict of reference rates at swap calibration time.
+        carry_gate: float or None. When provided, penalises forecasts where
+            swap cost exceeds this fraction of daily ATR (e.g. 0.10 = 10%).
 
     Returns:
         dict with:
@@ -181,7 +184,8 @@ def run_portfolio_backtest(instrument_data, vol_target_annual=0.12,
     results = _run_portfolio_pass(
         instrument_data, date_index, vol_target_annual,
         capital, buffer_fraction, weight, idm=idm_calc, costs=costs,
-        rates_daily=rates_daily, ref_rates=ref_rates
+        rates_daily=rates_daily, ref_rates=ref_rates,
+        carry_gate=carry_gate
     )
 
     # Calculate correlation matrix if not done in pass 1
@@ -201,16 +205,19 @@ def run_portfolio_backtest(instrument_data, vol_target_annual=0.12,
 
 def _run_portfolio_pass(instrument_data, date_index, vol_target_annual,
                         capital, buffer_fraction, weight, idm, costs=None,
-                        rates_daily=None, ref_rates=None):
+                        rates_daily=None, ref_rates=None,
+                        carry_gate=None):
     """
     Internal: run one pass of the portfolio backtest.
 
     Day-by-day loop across all instruments with shared capital.
     When costs dict is provided, deducts spread + commission + swap.
     When rates_daily + ref_rates provided, swap is time-varying.
+    When carry_gate is set, forecasts are penalised proportionally
+    when swap cost exceeds carry_gate fraction of daily ATR.
     """
     from core.forecast import price_volatility
-    from core.costs import calculate_daily_cost, get_swap_scale
+    from core.costs import calculate_daily_cost, get_swap_scale, carry_gate_penalty
     from config.instruments import INSTRUMENTS
 
     n_days = len(date_index)
@@ -267,6 +274,26 @@ def _run_portfolio_pass(instrument_data, date_index, vol_target_annual,
                 inst_positions[name].iloc[i] = inst_positions[name].iloc[i - 1]
                 continue
 
+            # Time-varying swap scale (shared by carry-gate and costs)
+            ss = 1.0
+            if costs and name in costs:
+                if rates_daily is not None and ref_rates is not None:
+                    if name in INSTRUMENTS:
+                        ss = get_swap_scale(
+                            name, INSTRUMENTS[name], date,
+                            rates_daily, ref_rates
+                        )
+
+                # Carry-gate: penalise forecast when swap is high vs ATR
+                if carry_gate is not None:
+                    fc_sign = (1 if fc_today > 0
+                               else (-1 if fc_today < 0 else 0))
+                    gate_p = carry_gate_penalty(
+                        fc_sign, costs[name], vol_today, ss,
+                        carry_gate
+                    )
+                    fc_today *= gate_p
+
             # Ideal position using portfolio formula
             daily_risk = (current_capital * vol_target_annual * idm
                           * weight / np.sqrt(256))
@@ -293,15 +320,6 @@ def _run_portfolio_pass(instrument_data, date_index, vol_target_annual,
             # Transaction costs
             if costs and name in costs:
                 delta = new_pos - prev_pos
-
-                # Time-varying swap scale
-                ss = 1.0
-                if rates_daily is not None and ref_rates is not None:
-                    if name in INSTRUMENTS:
-                        ss = get_swap_scale(
-                            name, INSTRUMENTS[name], date,
-                            rates_daily, ref_rates
-                        )
 
                 cost_total, cost_trade, cost_swap = calculate_daily_cost(
                     delta, prev_pos, close[date], costs[name],

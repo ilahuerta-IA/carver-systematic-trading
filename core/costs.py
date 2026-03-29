@@ -123,6 +123,46 @@ def get_swap_scale(instrument_name, instrument_cfg, date, rates_daily,
     return 1.0
 
 
+def carry_gate_penalty(forecast_sign, costs, vol_today, swap_scale=1.0,
+                       threshold=0.10):
+    """
+    Carry-gate penalty: reduce forecast when swap cost is high vs ATR.
+
+    penalty = max(0, 1 - swap_ratio / threshold)
+    where swap_ratio = daily_swap_cost / daily_volatility
+
+    Only penalises adverse swap (cost). Favourable swap (income)
+    receives no penalty (returns 1.0).
+
+    Args:
+        forecast_sign: +1 long, -1 short, 0 flat
+        costs: dict with swap_long_per_unit, swap_short_per_unit
+        vol_today: daily price volatility (ATR proxy, same units as swap)
+        swap_scale: time-varying rate multiplier
+        threshold: swap/ATR ratio at which forecast is fully blocked
+
+    Returns:
+        float: penalty factor in [0.0, 1.0]
+    """
+    if forecast_sign == 0 or vol_today <= 0 or threshold <= 0:
+        return 1.0
+
+    if forecast_sign > 0:
+        swap_rate = costs.get("swap_long_per_unit", 0.0)
+    else:
+        swap_rate = costs.get("swap_short_per_unit", 0.0)
+
+    # Positive swap_rate = income (favourable), no penalty
+    if swap_rate >= 0:
+        return 1.0
+
+    # Negative swap_rate = cost (adverse)
+    swap_daily = abs(swap_rate) * swap_scale * SWAP_CALENDAR_MULTIPLIER
+    swap_ratio = swap_daily / vol_today
+
+    return max(0.0, 1.0 - swap_ratio / threshold)
+
+
 def build_reference_rates(rates_daily):
     """
     Extract the reference rates (last available date in data).
