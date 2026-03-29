@@ -116,8 +116,41 @@ def carry_annualized(instrument_name, rates_daily):
     return carry
 
 
+def calibrate_carry_scalar(instrument_name, close, rates_daily):
+    """
+    Calibrate carry forecast scalar for one instrument.
+
+    Same method as Carver/pysystemtrade: scalar = 10 / abs(raw_forecast).mean()
+    This is normalization (like EWMAC per-speed scalars), NOT optimization.
+
+    Args:
+        instrument_name: key in INSTRUMENTS dict
+        close: pd.Series of daily prices (DatetimeIndex)
+        rates_daily: pd.DataFrame of daily rates (% p.a.)
+
+    Returns:
+        float: calibrated scalar (so abs(carry_forecast).mean() ~ 10)
+    """
+    carry = carry_annualized(instrument_name, rates_daily)
+    carry = carry.reindex(close.index, method="ffill")
+    ann_vol = _annualized_vol(close)
+    ann_vol_safe = ann_vol.replace(0, np.nan)
+    raw = carry / ann_vol_safe
+    raw_clean = raw.dropna()
+
+    if len(raw_clean) == 0:
+        return CARRY_SCALAR  # fallback
+
+    abs_mean = raw_clean.abs().mean()
+    if abs_mean < 1e-6:
+        return CARRY_SCALAR  # avoid division by near-zero
+
+    scalar = 10.0 / abs_mean
+    return round(scalar, 1)
+
+
 def carry_forecast(instrument_name, close, rates_daily,
-                   carry_scalar=CARRY_SCALAR):
+                   carry_scalar=None):
     """
     Calculate carry forecast for one instrument.
 
@@ -131,11 +164,17 @@ def carry_forecast(instrument_name, close, rates_daily,
         instrument_name: key in INSTRUMENTS dict
         close: pd.Series of daily prices (DatetimeIndex)
         rates_daily: pd.DataFrame of daily rates (% p.a.)
-        carry_scalar: multiplier for normalization (default 30.0)
+        carry_scalar: multiplier for normalization.
+                      If None, auto-calibrates from data.
 
     Returns:
         pd.Series of carry forecast values in [-20, +20]
     """
+    if carry_scalar is None:
+        carry_scalar = calibrate_carry_scalar(
+            instrument_name, close, rates_daily
+        )
+
     # Annualized carry (decimal)
     carry = carry_annualized(instrument_name, rates_daily)
 

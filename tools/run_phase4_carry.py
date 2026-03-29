@@ -38,6 +38,7 @@ from core.carry import (
     load_rates,
     carry_forecast,
     carry_annualized,
+    calibrate_carry_scalar,
     _rates_to_daily,
     _annualized_vol,
     CARRY_SCALAR,
@@ -146,9 +147,15 @@ def run_single_instrument(instrument, rates_daily, show_plots=True,
 
     close = df["Close"]
 
+    cfg = INSTRUMENTS[instrument]
+    use_carry = cfg["asset_class"] != "commodity"
+
     if not quiet:
         print(f"\n{'='*70}")
-        print(f" {instrument} - EWMAC + Carry (Phase 4)")
+        if use_carry:
+            print(f" {instrument} - EWMAC + Carry (Phase 4)")
+        else:
+            print(f" {instrument} - EWMAC only (commodity: carry excluded)")
         print(f"{'='*70}")
         print(f"Data: {len(close)} bars, "
               f"{close.index[0].date()} to {close.index[-1].date()}")
@@ -156,51 +163,76 @@ def run_single_instrument(instrument, rates_daily, show_plots=True,
     # === EWMAC COMBINED (same as Phase 3) ===
     ewmac_combined, ewmac_fdm, _ = calculate_ewmac_combined(close)
 
-    # === CARRY FORECAST ===
-    carry_fc = carry_forecast(instrument, close, rates_daily)
+    # === CARRY FORECAST (skip for commodities) ===
+    carry_fc = None
+    carry_scalar_used = None
+    tc_fdm = 1.0
+    tc_corr = 0.0
 
-    if not quiet:
-        carry_clean = carry_fc.dropna()
-        print(f"\nCarry Forecast ({instrument}):")
-        print(f"  Scalar:   {CARRY_SCALAR}")
-        print(f"  Mean:     {carry_clean.mean():.2f}")
-        print(f"  Std:      {carry_clean.std():.2f}")
-        print(f"  Abs Mean: {carry_clean.abs().mean():.2f} (target: ~10)")
-        print(f"  Min/Max:  {carry_clean.min():.2f} / {carry_clean.max():.2f}")
-        pct_cap = (carry_clean.abs() >= 19.9).mean() * 100
-        print(f"  % at cap: {pct_cap:.1f}%")
+    if use_carry:
+        carry_scalar_used = calibrate_carry_scalar(
+            instrument, close, rates_daily
+        )
+        carry_fc = carry_forecast(
+            instrument, close, rates_daily,
+            carry_scalar=carry_scalar_used,
+        )
 
-        # Carry direction info
-        cfg = INSTRUMENTS[instrument]
-        if cfg["asset_class"] == "fx":
-            carry_ann = carry_annualized(instrument, rates_daily)
-            carry_ann = carry_ann.reindex(close.index, method="ffill").dropna()
-            print(f"  Avg carry (ann): {carry_ann.mean()*100:.2f}% "
-                  f"({cfg['base_currency']}-{cfg['quote_currency']})")
-            print(f"  Carry > 0:  {(carry_ann > 0).mean()*100:.0f}% of days")
-        elif cfg["asset_class"] == "equity":
-            print(f"  Div yield approx: {cfg['div_yield_approx']*100:.1f}%")
-        elif cfg["asset_class"] == "commodity":
-            print(f"  Carry = -(funding rate) -- always negative")
+        if not quiet:
+            carry_clean = carry_fc.dropna()
+            print(f"\nCarry Forecast ({instrument}):")
+            print(f"  Scalar:   {carry_scalar_used} "
+                  f"(auto-calibrated, was {CARRY_SCALAR})")
+            print(f"  Mean:     {carry_clean.mean():.2f}")
+            print(f"  Std:      {carry_clean.std():.2f}")
+            print(f"  Abs Mean: {carry_clean.abs().mean():.2f} (target: ~10)")
+            print(f"  Min/Max:  {carry_clean.min():.2f} / "
+                  f"{carry_clean.max():.2f}")
+            pct_cap = (carry_clean.abs() >= 19.9).mean() * 100
+            print(f"  % at cap: {pct_cap:.1f}%")
 
-    # === TREND-CARRY FDM ===
-    tc_fdm, tc_corr = calculate_trend_carry_fdm(ewmac_combined, carry_fc)
+            cfg_inst = INSTRUMENTS[instrument]
+            if cfg_inst["asset_class"] == "fx":
+                carry_ann = carry_annualized(instrument, rates_daily)
+                carry_ann = carry_ann.reindex(
+                    close.index, method="ffill"
+                ).dropna()
+                print(f"  Avg carry (ann): {carry_ann.mean()*100:.2f}% "
+                      f"({cfg_inst['base_currency']}-"
+                      f"{cfg_inst['quote_currency']})")
+                print(f"  Carry > 0:  "
+                      f"{(carry_ann > 0).mean()*100:.0f}% of days")
+            elif cfg_inst["asset_class"] == "equity":
+                print(f"  Div yield approx: "
+                      f"{cfg_inst['div_yield_approx']*100:.1f}%")
 
-    if not quiet:
-        print(f"\nTrend-Carry Combination:")
-        print(f"  Weights: {WEIGHT_TREND:.0%} trend + {WEIGHT_CARRY:.0%} carry")
-        print(f"  Correlation(EWMAC, Carry): {tc_corr:.3f}")
-        print(f"  FDM (trend-carry): {tc_fdm:.4f}")
-        print(f"  EWMAC FDM (speeds): {ewmac_fdm:.4f}")
+        # === TREND-CARRY FDM ===
+        tc_fdm, tc_corr = calculate_trend_carry_fdm(
+            ewmac_combined, carry_fc
+        )
 
-    # === COMBINE TREND + CARRY ===
-    final_forecast = combine_forecasts(
-        [ewmac_combined, carry_fc],
-        weights=[WEIGHT_TREND, WEIGHT_CARRY],
-        fdm=tc_fdm,
-    )
+        if not quiet:
+            print(f"\nTrend-Carry Combination:")
+            print(f"  Weights: {WEIGHT_TREND:.0%} trend + "
+                  f"{WEIGHT_CARRY:.0%} carry")
+            print(f"  Correlation(EWMAC, Carry): {tc_corr:.3f}")
+            print(f"  FDM (trend-carry): {tc_fdm:.4f}")
+            print(f"  EWMAC FDM (speeds): {ewmac_fdm:.4f}")
 
-    if not quiet:
+        # === COMBINE TREND + CARRY ===
+        final_forecast = combine_forecasts(
+            [ewmac_combined, carry_fc],
+            weights=[WEIGHT_TREND, WEIGHT_CARRY],
+            fdm=tc_fdm,
+        )
+    else:
+        # Commodity: use EWMAC only (no carry available)
+        final_forecast = ewmac_combined
+        if not quiet:
+            print(f"\n  Carry EXCLUDED (commodity without term structure)")
+            print(f"  Using 100% EWMAC combined (same as Phase 3)")
+
+    if not quiet and use_carry:
         final_clean = final_forecast.dropna()
         ewmac_clean = ewmac_combined.dropna()
         print(f"\nFinal Combined Forecast:")
@@ -347,57 +379,75 @@ def run_single_instrument(instrument, rates_daily, show_plots=True,
         "ewmac_fdm": ewmac_fdm,
         "tc_fdm": tc_fdm,
         "tc_corr": tc_corr,
+        "use_carry": use_carry,
+        "carry_scalar_used": carry_scalar_used,
     }
 
 
 def print_comparison_table(results_dict):
     """Print multi-instrument comparison: EWMAC only vs EWMAC+Carry."""
-    print(f"\n{'='*110}")
+    print(f"\n{'='*115}")
     print(f" PHASE 4 SUMMARY -- EWMAC + Carry ({WEIGHT_TREND:.0%} / "
-          f"{WEIGHT_CARRY:.0%})")
-    print(f"{'='*110}")
+          f"{WEIGHT_CARRY:.0%}) | Commodities = EWMAC only")
+    print(f"{'='*115}")
 
     # Header
     header = (f"  {'Instrument':<12s} "
               f"{'Sharpe_EW':>10s} {'Sharpe_EC':>10s} {'Delta':>7s} "
               f"{'CAGR%_EC':>9s} {'Vol%':>6s} {'MaxDD%':>7s} "
-              f"{'PF_EC':>6s} {'Corr_TC':>8s} {'FDM_TC':>7s}")
+              f"{'PF_EC':>6s} {'Corr_TC':>8s} {'FDM_TC':>7s} "
+              f"{'Scalar':>7s} {'Mode':>10s}")
     print(header)
-    print(f"  {'-'*106}")
+    print(f"  {'-'*115}")
 
     improved = 0
-    total = 0
+    total_carry = 0
     for name, data in results_dict.items():
         me = data["metrics_ewmac"]
         mc = data["metrics_combined"]
         delta = mc["sharpe"] - me["sharpe"]
         sign = "+" if delta > 0 else ""
-        if delta > 0:
-            improved += 1
-        total += 1
+        use_carry = data["use_carry"]
+
+        if use_carry:
+            total_carry += 1
+            if delta > 0:
+                improved += 1
+            scalar_str = f"{data['carry_scalar_used']:.1f}"
+            mode_str = "EWMAC+Carry"
+        else:
+            scalar_str = "N/A"
+            mode_str = "EWMAC only"
 
         print(f"  {name:<12s} "
               f"{me['sharpe']:>10.3f} {mc['sharpe']:>10.3f} "
               f"{sign}{delta:>6.3f} "
               f"{mc['cagr_pct']:>9.2f} {mc['annual_vol_pct']:>6.1f} "
               f"{mc['max_dd_pct']:>7.1f} {mc['profit_factor']:>6.2f} "
-              f"{data['tc_corr']:>8.3f} {data['tc_fdm']:>7.4f}")
+              f"{data['tc_corr']:>8.3f} {data['tc_fdm']:>7.4f} "
+              f"{scalar_str:>7s} {mode_str:>10s}")
 
-    print(f"\n  Sharpe improved in {improved}/{total} instruments")
+    total_all = len(results_dict)
+    print(f"\n  Sharpe improved in {improved}/{total_carry} "
+          f"carry instruments (+ {total_all - total_carry} commodity "
+          f"= EWMAC only)")
 
-    # Carry scalar diagnostic
-    print(f"\n  Carry Forecast Scaling Diagnostic (scalar={CARRY_SCALAR}):")
-    print(f"  {'Instrument':<12s} {'AbsMean':>8s} {'Std':>8s} {'%Cap':>6s} "
-          f"{'Status':>10s}")
-    print(f"  {'-'*50}")
-    for name, data in results_dict.items():
-        carry_clean = data["carry_forecast"].dropna()
-        abs_mean = carry_clean.abs().mean()
-        std = carry_clean.std()
-        pct_cap = (carry_clean.abs() >= 19.9).mean() * 100
-        status = "OK" if 5 < abs_mean < 15 else "CHECK"
-        print(f"  {name:<12s} {abs_mean:>8.2f} {std:>8.2f} "
-              f"{pct_cap:>5.1f}% {status:>10s}")
+    # Carry scalar diagnostic (only for carry instruments)
+    carry_items = {k: v for k, v in results_dict.items() if v["use_carry"]}
+    if carry_items:
+        print(f"\n  Carry Forecast Scaling Diagnostic (auto-calibrated):")
+        print(f"  {'Instrument':<12s} {'Scalar':>8s} {'AbsMean':>8s} "
+              f"{'Std':>8s} {'%Cap':>6s} {'Status':>10s}")
+        print(f"  {'-'*56}")
+        for name, data in carry_items.items():
+            carry_clean = data["carry_forecast"].dropna()
+            abs_mean = carry_clean.abs().mean()
+            std = carry_clean.std()
+            pct_cap = (carry_clean.abs() >= 19.9).mean() * 100
+            status = "OK" if 5 < abs_mean < 15 else "CHECK"
+            scalar = data["carry_scalar_used"]
+            print(f"  {name:<12s} {scalar:>8.1f} {abs_mean:>8.2f} "
+                  f"{std:>8.2f} {pct_cap:>5.1f}% {status:>10s}")
 
 
 def main():
